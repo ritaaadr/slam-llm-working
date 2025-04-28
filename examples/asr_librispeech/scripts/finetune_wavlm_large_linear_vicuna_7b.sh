@@ -1,6 +1,6 @@
 #!/bin/bash
-# export PYTHONPATH=/root/whisper:$PYTHONPATH
-export PYTHONPATH=/root/fairseq:$PYTHONPATH
+# export PYTHONPATH=/workspace/whisper:$PYTHONPATH
+export PYTHONPATH=/workspace/fairseq:$PYTHONPATH
 export CUDA_VISIBLE_DEVICES=0,1
 export TOKENIZERS_PARALLELISM=false
 # export CUDA_LAUNCH_BLOCKING=1
@@ -11,16 +11,16 @@ export OMP_NUM_THREADS=1
 # export NCCL_DEBUG_SUBSYS=ALL
 # export TORCH_DISTRIBUTED_DEBUG=INFO
 
-run_dir=/root/SLAM-LLM
+run_dir=/workspace/SLAM-LLM
 cd $run_dir
 code_dir=examples/asr_librispeech
 
-speech_encoder_path=/nfs/maziyang.mzy/models/wavlm/WavLM-Large.pt
-llm_path=/nfs/maziyang.mzy/models/vicuna-7b-v1.5
-train_data_path=/nfs/maziyang.mzy/data/librispeech/librispeech_train_960h.jsonl
-val_data_path=/nfs/maziyang.mzy/data/librispeech/librispeech_dev_other.jsonl
+speech_encoder_path=/workspace/SLAM-LLM/checkpoints/WavLM-Large.pt
+llm_path=/workspace/SLAM-LLM/src/slam_llm/models/vicuna-7b
+train_data_path=/workspace/SLAM-LLM/LibriSpeech/debug-wav-fixed.jsonl
+val_data_path=/workspace/SLAM-LLM/LibriSpeech/librispeech_dev.jsonl
 
-output_dir=/root/tmp/vicuna-7b-v1.5-librispeech-linear-steplrwarmupkeep1e-4-wavlm-large-$(date +"%Y%m%d")
+output_dir=/workspace/SLAM-LLM/tmp/vicuna-7b-v1.5-librispeech-linear-steplrwarmupkeep1e-4-wavlm-large-$(date +"%Y%m%d")
 
 hydra_args="
 hydra.run.dir=$output_dir \
@@ -39,7 +39,7 @@ hydra.run.dir=$output_dir \
 ++dataset_config.val_data_path=$val_data_path \
 ++dataset_config.input_type=raw \
 ++train_config.model_name=asr \
-++train_config.num_epochs=3 \
+++train_config.num_epochs=1 \
 ++train_config.freeze_encoder=true \
 ++train_config.freeze_llm=true \
 ++train_config.batching_strategy=custom \
@@ -47,8 +47,8 @@ hydra.run.dir=$output_dir \
 ++train_config.total_steps=100000 \
 ++train_config.lr=1e-4 \
 ++train_config.validation_interval=1000 \
-++train_config.batch_size_training=4 \
-++train_config.val_batch_size=4 \
+++train_config.batch_size_training=1 \
+++train_config.val_batch_size=1 \
 ++train_config.num_workers_dataloader=2 \
 ++train_config.output_dir=$output_dir \
 ++metric=acc \
@@ -61,15 +61,14 @@ if [[ $CUDA_VISIBLE_DEVICES != *","* ]]; then
         --config-name "prompt.yaml" \
         $hydra_args
 else
-    torchrun \
-        --nnodes 1 \
-        --nproc_per_node 2 \
-        --master_port=29503 \
-        $code_dir/finetune_asr.py \
-        --config-path "conf" \
-        --config-name "prompt.yaml" \
-        ++train_config.enable_fsdp=false \
-        ++train_config.enable_ddp=true \
-        ++train_config.use_fp16=true \
-        $hydra_args
+    CUDA_VISIBLE_DEVICES=0 \
+    python $code_dir/finetune_asr.py \
+    --config-path "conf" \
+    --config-name "prompt.yaml" \
+    ++train_config.enable_fsdp=false \
+    ++train_config.enable_ddp=false \
+    ++train_config.use_fp16=true \
+    ++train_config.one_gpu=true \
+    $hydra_args
+
 fi
