@@ -24,6 +24,7 @@ class ModelConfig:
     encoder_type: str = field(default="finetune", metadata={
         "help": "whether model is only pretrained or finetuned, used for models such as hubert"
     })
+    load_in_8bit:bool = True
 
 @dataclass
 class PeftConfig:
@@ -82,6 +83,12 @@ class TrainConfig:
         "help": "whether to freeze llm when finetuning, should be true when use peft finetuning"
     })
     freeze_encoder:bool = False
+    use_gradient_checkpointing:bool = False
+    
+    early_stopping:bool = True
+    early_stopping_patience:int = 3
+    early_stopping_min_delta:float = 0.001
+
 
 @dataclass
 class DataConfig:
