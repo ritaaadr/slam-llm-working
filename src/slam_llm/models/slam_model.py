@@ -15,6 +15,9 @@ from peft import PeftModel, PeftConfig
 from torch.nn import CrossEntropyLoss
 from slam_llm.utils.metric import compute_accuracy
 
+from transformers import BitsAndBytesConfig
+
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -147,12 +150,27 @@ def setup_llm(train_config, model_config, **kwargs):
                     use_cache=use_cache,
                 )
             else:
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_config.llm_path,
-                    load_in_8bit=True if train_config.quantization else None,
-                    device_map="auto" if train_config.quantization else None,
-                    use_cache=use_cache,
-                )
+                if train_config.quantization:
+                    bnb_config = BitsAndBytesConfig(
+                        load_in_8bit=True,
+                        llm_int8_enable_fp32_cpu_offload=True,
+                        load_in_8bit_fp32_cpu_offload=True 
+                    )
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_config.llm_path,
+                        quantization_config=bnb_config,
+                        device_map="auto",
+                        use_cache=use_cache,
+                        trust_remote_code=True,
+                    )
+                else:
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_config.llm_path,
+                        device_map="auto",
+                        use_cache=use_cache,
+                        trust_remote_code=True,
+                    )
+
         else:
             llama_config = AutoConfig.from_pretrained(model_config.llm_path)
             llama_config.use_cache = use_cache
@@ -178,12 +196,27 @@ def setup_llm(train_config, model_config, **kwargs):
                 use_cache=use_cache,
             )
         else:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_config.llm_path,
-                load_in_8bit=True if train_config.quantization else None,
-                device_map="auto" if train_config.quantization else None,
-                use_cache=use_cache,
-            )
+            if train_config.quantization:
+                bnb_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_enable_fp32_cpu_offload=True,
+                    load_in_8bit_fp32_cpu_offload=True 
+                )
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_config.llm_path,
+                    quantization_config=bnb_config,
+                    device_map="auto",
+                    use_cache=use_cache,
+                    trust_remote_code=True,
+                )
+            else:
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_config.llm_path,
+                    device_map="auto",
+                    use_cache=use_cache,
+                    trust_remote_code=True,
+                )
+
     if (train_config.enable_fsdp or train_config.enable_ddp) and train_config.use_fast_kernels:
         """
         For FSDP and FSDP+PEFT, setting 'use_fast_kernels' will enable
@@ -331,7 +364,11 @@ class slam_model(nn.Module):
             if self.model_config.encoder_name == "SpatialAST":
                 encoder_outs = self.encoder(audio) # output: [bs, seq_len=3+512, dim=768]
             if self.model_config.encoder_name == "wavlm":
-                encoder_outs = self.encoder.extract_features(audio, 1 - audio_mask) #(FIX:MZY): 1-audio_mask is needed for wavlm as the padding mask
+                #TODO aggiusto mismatch per via della quantizzazione e muovo wavlm sulla gpu
+                from torch.cuda.amp import autocast
+                with autocast(enabled=False):
+                    self.encoder = self.encoder.to(audio.device)
+                    encoder_outs = self.encoder.extract_features(audio.float(), 1 - audio_mask) #(FIX:MZY): 1-audio_mask is needed for wavlm as the padding mask
             if self.model_config.encoder_name == "hubert":
                 results = self.encoder(source = audio, padding_mask = 1-audio_mask)
                 if self.model_config.encoder_type == "pretrain":
@@ -351,6 +388,8 @@ class slam_model(nn.Module):
             if self.encoder is None:
                 encoder_outs = audio_mel if audio_mel is not None else audio
 
+            
+            self.encoder_projector = self.encoder_projector.to(encoder_outs.device) #TODO sposto il projector sulla cpu
             if self.model_config.encoder_projector == "q-former":
                 encoder_outs = self.encoder_projector(encoder_outs, audio_mel_post_mask)
             if self.model_config.encoder_projector == "linear":
@@ -439,8 +478,8 @@ class slam_model(nn.Module):
         model_outputs = self.llm.generate(
             inputs_embeds=inputs_embeds,
             # max_length=kwargs.get("max_length", 200),
-            max_new_tokens=kwargs.get("max_new_tokens", 200),
-            num_beams=kwargs.get("num_beams", 4),
+            max_new_tokens=kwargs.get("max_new_tokens", 100),
+            num_beams=kwargs.get("num_beams", 1),
             do_sample=kwargs.get("do_sample", False),
             min_length=kwargs.get("min_length", 1),
             top_p=kwargs.get("top_p", 1.0),
@@ -452,5 +491,6 @@ class slam_model(nn.Module):
             eos_token_id=self.tokenizer.eos_token_id,
             pad_token_id=self.tokenizer.pad_token_id
         )
+
 
         return model_outputs
